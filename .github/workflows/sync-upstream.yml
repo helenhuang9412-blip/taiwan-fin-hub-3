@@ -26,7 +26,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Sync upstream main safely
+           - name: Sync upstream main safely
         shell: bash
         run: |
           set -euo pipefail
@@ -34,13 +34,22 @@ jobs:
           git config user.name "taiwan-fin-hub-updater"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          updater="scripts/sync-upstream.mjs"
-          if [ ! -f "$updater" ]; then
-            # 舊版 Cloudflare 部署 repo 尚未包含 updater script；只下載至 runner 暫存目錄。
-            updater="$RUNNER_TEMP/sync-upstream.mjs"
-            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-              "https://raw.githubusercontent.com/TedLin1993/all-set-tw/main/scripts/sync-upstream.mjs" \
-              --output "$updater"
+          # 永遠下載作者最新版 updater 到暫存區，不修改 repository 內的程式碼。
+          updater="$RUNNER_TEMP/sync-upstream.mjs"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/TedLin1993/all-set-tw/main/scripts/sync-upstream.mjs" \
+            --output "$updater"
+
+          # Cloudflare Deploy to Cloudflare 會修改 wrangler.toml
+          # 首次版本辨識時忽略該檔，避免把正常的部署客製化誤判成未知版本。
+          sed -i \
+            's/if (!path.startsWith(WORKFLOW_PREFIX)) {/if (!path.startsWith(WORKFLOW_PREFIX) \&\& path !== "wrangler.toml") {/' \
+            "$updater"
+
+          # 若作者日後改變程式結構，寧可停止，不要在未確認下繼續同步。
+          if ! grep -q 'path !== "wrangler.toml"' "$updater"; then
+            echo "無法安全套用 Cloudflare 部署相容修正，停止同步。"
+            exit 1
           fi
 
           node "$updater"
