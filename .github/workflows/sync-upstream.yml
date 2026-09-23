@@ -1,17 +1,13 @@
-name: Sync Latest Version
+name: Diagnose Upstream Sync
 
 on:
-  schedule:
-    # GitHub Actions 使用 UTC；台灣時間每天 04:15 執行。
-    - cron: "15 20 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  sync:
-    if: github.repository != 'TedLin1993/taiwan-fin-hub' && github.repository != 'TedLin1993/all-set-tw'
+  diagnose:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,26 +17,44 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Sync upstream main safely
+      - name: Find closest upstream version
         shell: bash
         run: |
           set -euo pipefail
 
-          git config user.name "taiwan-fin-hub-updater"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote remove upstream-debug 2>/dev/null || true
+          git remote add upstream-debug https://github.com/TedLin1993/all-set-tw.git
+          git fetch --no-tags upstream-debug main
 
-          updater="$RUNNER_TEMP/sync-upstream.mjs"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/TedLin1993/all-set-tw/main/scripts/sync-upstream.mjs" \
-            --output "$updater"
+          root="$(git rev-list --max-parents=0 HEAD | head -n 1)"
 
-          sed -i \
-            's/if (!path.startsWith(WORKFLOW_PREFIX)) {/if (!path.startsWith(WORKFLOW_PREFIX) \&\& path !== "wrangler.toml") {/' \
-            "$updater"
+          echo "Deployment root commit: $root"
+          echo "Searching for the closest upstream version..."
 
-          if ! grep -q 'path !== "wrangler.toml"' "$updater"; then
-            echo "無法安全套用 Cloudflare 部署相容修正，停止同步。"
-            exit 1
-          fi
+          best=""
+          best_count=999999
 
-          node "$updater"
+          while read -r commit; do
+            count="$(
+              git diff --name-only "$root" "$commit" -- \
+                . \
+                ':(exclude).github/workflows/**' \
+              | sed '/^$/d' \
+              | wc -l
+            )"
+
+            if [ "$count" -lt "$best_count" ]; then
+              best_count="$count"
+              best="$commit"
+            fi
+          done < <(git rev-list upstream-debug/main)
+
+          echo
+          echo "Closest upstream commit: $best"
+          echo "Different file count: $best_count"
+          echo
+          echo "=== Different paths ==="
+
+          git diff --name-status "$root" "$best" -- \
+            . \
+            ':(exclude).github/workflows/**'
